@@ -1,0 +1,362 @@
+---
+title: "Google Ads Data"
+author: "Fabio Votta"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+## Packages and Folders
+
+```{r}
+# Install these packages if you don't have them yet
+# if (!require("pacman")) install.packages("pacman")
+# devtools::install_github("favstats/tidytemplate")
+
+knitr::opts_chunk$set(warning = F, message = F)
+
+options(scipen = 999)
+
+pacman::p_load(tidyverse, tidytemplate, countrycode)
+
+# Creates folders
+# tidytemplate::data_dir()
+# tidytemplate::images_dir()
+```
+
+
+## Load Data
+
+```{r, data}
+
+ggl_ads <- read_csv("data/google-political-ads-creative-stats.csv")%>% 
+  mutate(Regions = str_remove_all(Regions, "EU|,") %>% str_trim)  %>% 
+  mutate(cntry = countrycode::countrycode(Regions, origin = "iso2c", destination = "country.name"))  %>%
+  janitor::clean_names()   %>% 
+  mutate(spend = map2(as.list(spend_range_min_usd), as.list(spend_range_max_usd), c)) %>% 
+  mutate(spend = spend %>% map_dbl(median)) %>% 
+  mutate(age_targeting2 = as.factor(age_targeting) %>% as.numeric) %>% 
+  mutate(gender_targeting2 = as.factor(gender_targeting) %>% as.numeric) %>% 
+  mutate(age_targeted = !(age_targeting2 %in% c(47, 10)), 
+         gender_targeted = !(gender_targeting2 %in% c(7, 5)), 
+         region_targeted = !(geo_targeting_included %in% c("Not targeted") & geo_targeting_excluded %in% c("Not targeted")),
+         male = str_detect(gender_targeting, 'Male'), 
+         female = str_detect(gender_targeting, 'Female')) %>%
+  glimpse()
+
+```
+
+## Date range of data
+
+Earliest run date:
+
+```{r}
+min(ggl_ads$first_served_timestamp, na.rm = T)
+```
+
+Latest run date:
+
+```{r}
+
+max(ggl_ads$last_served_timestamp, na.rm = T)
+```
+
+## Number of countries
+
+```{r}
+ggl_ads %>% 
+  distinct(cntry) %>% 
+  nrow
+```
+
+
+## Number of Ads
+
+```{r}
+nrow(ggl_ads)
+```
+
+
+## Number of Political ads
+
+```{r}
+
+ggl_ads %>% 
+  count(cntry, sort = T) %>% 
+  # filter(str_count(Regions)==2)%>% 
+  mutate(cntry = fct_reorder(cntry, n)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, n)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nNumber of Political Ads on Google", x = "") +
+  theme_minimal()
+
+```
+
+
+
+## Most spend per ad
+
+```{r}
+spend_dat <- ggl_ads %>% 
+  group_by(cntry) %>% 
+  summarize(mean_spend_per_ad = mean(spend, na.rm = T),
+            median_spend_per_ad = median(spend, na.rm = T))
+
+spend_dat %>% 
+  mutate(cntry = fct_reorder(cntry, mean_spend_per_ad)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, mean_spend_per_ad)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nDollars spent per Political Ad on Google", x = "") +
+  theme_minimal()
+```
+
+
+## Most active advertiser
+
+```{r}
+ggl_ads %>% 
+  count(advertiser_name, sort = T)%>% 
+  mutate(perc = round(n/sum(n) * 100, 2)) %>% 
+  slice(1:10)
+```
+
+## Most common categories for gender targeting
+
+```{r}
+ggl_ads %>% 
+  count(gender_targeting, sort = T) %>% 
+  mutate(perc = round(n/sum(n) * 100, 2))
+```
+
+## Most common categories for age targeting
+
+```{r}
+ggl_ads %>% 
+  count(age_targeting, sort = T) %>% 
+  mutate(perc = round(n/sum(n) * 100, 2))
+```
+
+## Most common categories for geo targeting
+
+```{r}
+ggl_ads %>% 
+  count(geo_targeting_included, sort = T) %>% 
+  mutate(perc = round(n/sum(n) * 100, 2))
+```
+
+
+
+
+
+
+## Age Targeting
+
+```{r}
+ggl_ads %>% 
+  count(age_targeted, sort = T) %>% 
+  mutate(total = sum(n)) %>% 
+  mutate(perc = round(n/total*100,2))
+  
+```
+
+## Gender Targeting
+
+```{r}
+ggl_ads %>% 
+  count(gender_targeted, sort = T) %>% 
+  mutate(total = sum(n)) %>% 
+  mutate(perc = round(n/total*100,2))
+```
+
+
+## Region Targeting
+
+```{r}
+ggl_ads %>% 
+  count(region_targeted, sort = T) %>% 
+  mutate(total = sum(n)) %>% 
+  mutate(perc = round(n/total*100,2))
+```
+
+
+## Targeting per Country
+
+
+```{r}
+
+
+fin_dat <- ggl_ads %>%
+  group_by(advertiser_id, advertiser_name, cntry) %>%
+  summarize(mean_spend_per_ad = mean(spend, na.rm = T),
+            median_spend_per_ad = median(spend, na.rm = T),
+            prop_age_targeted = mean(as.numeric(age_targeted), na.rm = T),
+            prop_gender_targeted = mean(as.numeric(gender_targeted), na.rm = T),
+            prop_region_targeted = mean(as.numeric(region_targeted), na.rm = T),
+            prop_female_targeted = mean(as.numeric(female & !male), na.rm = T),
+            prop_male_targeted = mean(as.numeric(male & !female), na.rm = T), 
+            sum_expense = sum(spend_range_max_usd),
+            n_add = n()) %>%
+  arrange(-prop_male_targeted)
+```
+
+### Age Range
+
+```{r}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  arrange(desc(prop_age_targeted)) %>% 
+  group_by(cntry) %>% 
+  summarize(prop_age_targeted = mean(prop_age_targeted)) %>% 
+  drop_na() %>% 
+  mutate(cntry = fct_reorder(cntry, prop_age_targeted)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, prop_age_targeted)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nAverage Proportion of Ads that are targeting a specific Age Range", x = "") +
+  theme_minimal()
+```
+
+### Female but not male
+
+```{r}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  arrange(desc(prop_gender_targeted)) %>% 
+  group_by(cntry) %>% 
+  summarize(prop_gender_targeted = mean(prop_gender_targeted)) %>% 
+  drop_na() %>% 
+  mutate(cntry = fct_reorder(cntry, prop_gender_targeted)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, prop_gender_targeted)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nAverage Proportion of Ads that are targeting a specific Gender", x = "") +
+  theme_minimal()
+```
+
+
+### Male but not female
+
+```{r}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  arrange(desc(prop_male_targeted)) %>% 
+  group_by(cntry) %>% 
+  summarize(prop_male_targeted = mean(prop_male_targeted)) %>% 
+  drop_na() %>% 
+  mutate(cntry = fct_reorder(cntry, prop_male_targeted)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, prop_male_targeted)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nAverage Proportion of Ads that are targeting Male users", x = "") +
+  theme_minimal()
+```
+
+### Region
+
+```{r}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  arrange(desc(prop_female_targeted)) %>% 
+  group_by(cntry) %>% 
+  summarize(prop_female_targeted = mean(prop_female_targeted)) %>% 
+  drop_na() %>% 
+  mutate(cntry = fct_reorder(cntry, prop_female_targeted)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, prop_female_targeted)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nAverage Proportion of Ads that are targeting Female users", x = "") +
+  theme_minimal()
+```
+
+```{r}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  arrange(desc(prop_region_targeted)) %>% 
+  group_by(cntry) %>% 
+  summarize(prop_region_targeted = mean(prop_region_targeted)) %>% 
+  drop_na() %>% 
+  mutate(cntry = fct_reorder(cntry, prop_region_targeted)) %>% 
+  drop_na(cntry) %>% 
+  ggplot(aes(cntry, prop_region_targeted)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "\nAverage Proportion of Ads that are targeting a specific Region", x = "") +
+  theme_minimal()
+```
+
+## Microtargeting per Country
+
+
+
+### Age
+
+```{r, results='asis'}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  group_by(cntry)  %>% 
+  arrange(cntry, desc(prop_age_targeted)) %>% 
+  slice(1:10) %>%
+  filter(prop_age_targeted != 0) %>% 
+  select(advertiser_name, cntry, mean_spend_per_ad, prop_age_targeted, prop_gender_targeted, prop_region_targeted) %>% 
+  group_split(cntry) %>% 
+  map(knitr::kable)
+  
+```
+
+### Gender
+
+```{r, results='asis'}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  group_by(cntry)  %>% 
+  arrange(cntry, desc(prop_gender_targeted)) %>% 
+  slice(1:10) %>%
+  filter(prop_gender_targeted != 0) %>% 
+  select(advertiser_name, cntry, mean_spend_per_ad, prop_age_targeted, prop_gender_targeted, prop_region_targeted) %>% 
+  group_split(cntry) %>% 
+  map(knitr::kable)
+  
+```
+
+### Region
+
+```{r, results='asis'}
+fin_dat %>% 
+  ungroup() %>% 
+  filter(n_add >= 100) %>% 
+  group_by(cntry)  %>% 
+  arrange(cntry, desc(prop_region_targeted)) %>% 
+  slice(1:10) %>%
+  filter(prop_region_targeted != 0) %>% 
+  select(advertiser_name, cntry, mean_spend_per_ad, prop_age_targeted, prop_gender_targeted, prop_region_targeted) %>% 
+  group_split(cntry) %>% 
+  map(knitr::kable)
+  
+```
+
+## Correlation between Gender and Age targeted
+
+```{r}
+fin_dat %>% 
+  filter(n_add >= 10) %>% 
+  ggplot(aes(prop_gender_targeted, prop_age_targeted)) +
+  geom_point() +
+  theme_minimal()
+```
+
